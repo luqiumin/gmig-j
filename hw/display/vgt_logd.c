@@ -252,7 +252,6 @@ vgt_prehashing_iterate(void) {
 
             while (gfn >= max_sent_gpfn) {
                 wait_cnt++;
-                if (wait_cnt>2) return;
 //                printf("gfn too large %d...\n", wait_cnt);
                 g_usleep(10000);
             }
@@ -275,11 +274,7 @@ static void*
 do_vgt_prehashing_thread(void *opaque) {
     while (vgt_logd.max_gpfn < ram_npages/2)
         g_usleep(100000);
-    while (1) {
-        g_usleep(10000);
-        //DPRINTF("prehashing iterating: %d\n", pre_hash_hit_counter);
-        vgt_prehashing_iterate();
-    }
+    vgt_prehashing_iterate();
     return NULL;
 }
 
