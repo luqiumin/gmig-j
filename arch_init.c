@@ -121,6 +121,11 @@ static uint64_t bitmap_sync_count;
 
 extern uint64_t migration_time_base_ns;
 
+
+static uint64_t cpu_page_send_cycle_count = 0;
+static uint64_t gpu_page_send_cycle_count = 0;
+static uint64_t hashing_cycle_count = 0;
+
 /***********************************************************/
 /* ram save/restore */
 
@@ -875,11 +880,16 @@ static int ram_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
         *bytes_transferred += save_page_header(f, block,
                                                offset | RAM_SAVE_FLAG_PAGE);
         if (!last_stage) {
+            uint64_t cycle_begin = rdtsc(), cycle_end;
             if (vgt_gpu_releated(current_addr >> TARGET_PAGE_BITS)) {
                 vgt_hash_a_page(p, current_addr >> TARGET_PAGE_BITS);
                 hash_cpu_pages_count++;
             }
+            cycle_end = rdtsc();
+            hashing_cycle_count += (cycle_end - cycle_begin);
         }
+
+        uint64_t cycle_begin = rdtsc(), cycle_end;
         if (send_async) {
             qemu_put_buffer_async(f, p, TARGET_PAGE_SIZE);
         } else {
@@ -888,6 +898,8 @@ static int ram_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
         *bytes_transferred += TARGET_PAGE_SIZE;
         pages = 1;
         acct_info.norm_pages++;
+        cycle_end = rdtsc();
+        cpu_page_send_cycle_count += (cycle_end - cycle_begin);
     }
 
     XBZRLE_cache_unlock();
@@ -917,8 +929,11 @@ static int gm_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
         /* if it's not the last stage, then it has to be the first cycle,
          * and we have to caculate the hash value of it
          */
+        uint64_t cycle_begin = rdtsc(), cycle_end;
         vgt_hash_a_page(p, current_addr >> TARGET_PAGE_BITS);
         hash_gpu_pages_count++;
+        cycle_end = rdtsc();
+        hashing_cycle_count += (cycle_end - cycle_begin);
     }
     else if (!ram_bulk_stage && !last_stage) {
         //printf("gm_save_page, not bulk or last!!!\n");
@@ -928,23 +943,32 @@ static int gm_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
         /* if it's the last stage, we calculate the hash value, if it is
          * not dirty, we skip it
          */
+        uint64_t cycle_begin = rdtsc(), cycle_end;
         hash_gpu_pages_count++;
         if (!vgt_page_is_modified(p, current_addr >> TARGET_PAGE_BITS)) {
             skip_by_hashing++;
+            cycle_end = rdtsc();
+            hashing_cycle_count += (cycle_end - cycle_begin);
             return 0;
         }
+        cycle_end = rdtsc();
+        hashing_cycle_count += (cycle_end - cycle_begin);
     }
 
     if (block == last_sent_block) {
         offset |= RAM_SAVE_FLAG_CONTINUE;
     }
 
+
+    uint64_t cycle_begin = rdtsc(), cycle_end;
     *bytes_transferred += save_page_header(f, block,
                                    offset | RAM_SAVE_FLAG_PAGE);
     qemu_put_buffer(f, p, TARGET_PAGE_SIZE);
     *bytes_transferred += TARGET_PAGE_SIZE;
     pages = 1;
     acct_info.norm_pages++;
+    cycle_end = rdtsc();
+    gpu_page_send_cycle_count += (cycle_end - cycle_begin);
 
 //    printf("gm_save_page: initial: %d, final: %d, modified: %d\n", initial_cnt, final_cnt, final_mod_cnt);
 
@@ -964,6 +988,9 @@ static int gm_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
  * @last_stage: if we are at the completion stage
  * @bytes_transferred: increase it with the number of transferred bytes
  */
+
+
+
 #if 1
 static int ram_gm_find_and_save_block(QEMUFile *f, bool last_stage,
                                    uint64_t *bytes_transferred)
@@ -1024,6 +1051,14 @@ static int ram_gm_find_and_save_block(QEMUFile *f, bool last_stage,
                 complete_stage_sent_cpu += ram_pages;
                 complete_stage_sent_gpu += gm_pages;
             }
+
+#if 0
+            if (pages >= 2) {
+                printf("jachin: ram_pages: %d, gm_pages: %d, ram_offset: %lx, gm_offset: %lx\n",
+                        ram_pages, gm_pages, ram_offset, gm_offset);
+                exit(0);
+            }
+#endif
 
             /* if page is unmodified, continue to the next */
             if (pages > 0) {
@@ -1402,6 +1437,7 @@ static int ram_save_complete(QEMUFile *f, void *opaque)
     trace_hash_cpu_pages(hash_cpu_pages_count);
     trace_hash_gpu_pages(hash_gpu_pages_count);
     trace_skip_by_hashing(skip_by_hashing);
+    trace_complete_round_cycles(cpu_page_send_cycle_count, gpu_page_send_cycle_count, hashing_cycle_count);
     return 0;
 }
 
