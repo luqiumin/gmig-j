@@ -54,6 +54,7 @@
 #include "qemu/host-utils.h"
 #include "qemu/rcu_queue.h"
 #include "hw/display/vgt_logd.h"
+#include <sys/time.h>
 
 //#define DEBUG_ARCH_INIT
 #ifdef DEBUG_ARCH_INIT
@@ -120,6 +121,14 @@ static uint64_t bitmap_sync_count;
 
 
 extern uint64_t migration_time_base_ns;
+
+
+
+static bool is_ram_stage = true;
+static uint64_t last_block_begin_time = 0;
+static uint64_t gpu_count_time = 0;
+static uint64_t cpu_count_time = 0;
+static uint32_t hashing_count_time = 0;
 
 /***********************************************************/
 /* ram save/restore */
@@ -928,9 +937,12 @@ static int gm_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
         /* if it's the last stage, we calculate the hash value, if it is
          * not dirty, we skip it
          */
+        uint64_t t0 = qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000, t1;
         hash_gpu_pages_count++;
         if (!vgt_page_is_modified(p, current_addr >> TARGET_PAGE_BITS)) {
             skip_by_hashing++;
+            t1 = qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000;
+            hashing_count_time+=(t1-t0);
             return 0;
         }
     }
@@ -965,6 +977,7 @@ static int gm_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
  * @bytes_transferred: increase it with the number of transferred bytes
  */
 #if 1
+
 static int ram_gm_find_and_save_block(QEMUFile *f, bool last_stage,
                                    uint64_t *bytes_transferred)
 {
@@ -978,12 +991,31 @@ static int ram_gm_find_and_save_block(QEMUFile *f, bool last_stage,
     if (!block)
         block = QLIST_FIRST_RCU(&ram_list.blocks);
 
+    if (is_complete_stage && last_block_begin_time == 0) {
+        last_block_begin_time = get_mig_time();
+        is_ram_stage = true;
+    }
+
     while (true) {
         mr = block->mr;
-        if (ram_offset < block->used_length)
+        if (ram_offset < block->used_length) {
+            if (is_complete_stage && !is_ram_stage) {
+                is_ram_stage = true;
+                uint64_t this_block_begin_time = get_mig_time();
+                gpu_count_time += (this_block_begin_time - last_block_begin_time);
+                last_block_begin_time = this_block_begin_time;
+            }
             ram_offset = migration_bitmap_find_and_reset_dirty(mr, ram_offset);
-        if (gm_offset < block->used_length)
+        }
+        else if (gm_offset < block->used_length) {
+            if (is_complete_stage && is_ram_stage) {
+                is_ram_stage = false;
+                uint64_t this_block_begin_time = get_mig_time();
+                cpu_count_time += (this_block_begin_time - last_block_begin_time);
+                last_block_begin_time = this_block_begin_time;
+            }
             gm_offset = vgpu_bitmap_find_and_reset_dirty(mr, gm_offset);
+        }
 
         if (complete_round && block == last_seen_block &&
             ram_offset >= last_offset && gm_offset >= last_gm_offset) {
@@ -1013,7 +1045,7 @@ static int ram_gm_find_and_save_block(QEMUFile *f, bool last_stage,
             if (ram_offset < block->used_length)
                 ram_pages = ram_save_page(f, block, ram_offset, last_stage,
                                   bytes_transferred);
-            if (gm_offset < block->used_length)
+            else if (gm_offset < block->used_length)
                 gm_pages = gm_save_page(f, block, gm_offset, last_stage,
                                   bytes_transferred);
             pages += (gm_pages + ram_pages);
@@ -1402,6 +1434,7 @@ static int ram_save_complete(QEMUFile *f, void *opaque)
     trace_hash_cpu_pages(hash_cpu_pages_count);
     trace_hash_gpu_pages(hash_gpu_pages_count);
     trace_skip_by_hashing(skip_by_hashing);
+    trace_static_round_time(gpu_count_time, cpu_count_time, hashing_count_time);
     return 0;
 }
 

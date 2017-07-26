@@ -57,6 +57,13 @@ MigrationState *migrate_get_current(void)
     return &current_migration;
 }
 
+
+uint64_t migration_time_base_ns;
+static inline uint64_t get_mig_time(void) {
+    return (qemu_clock_get_ns(QEMU_CLOCK_HOST) - migration_time_base_ns)/1000;
+}
+
+
 /*
  * Called on -incoming with a defer: uri.
  * The migration can be started later after any parameters have been
@@ -606,7 +613,6 @@ int64_t migrate_xbzrle_cache_size(void)
 }
 
 /* migration thread support */
-uint64_t migration_time_base_ns;
 extern bool ram_bulk_stage;
 static void *migration_thread(void *opaque)
 {

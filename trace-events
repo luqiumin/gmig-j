@@ -1609,3 +1609,6 @@ complete_round_pages(int cpu_pages, int gpu_pages) "complete stage: cpu: %d, gpu
 hash_gpu_pages(int gpu_pages) "hash gpu pages: %d"
 hash_cpu_pages(int cpu_paegs) "hash cpu pages: %d"
 skip_by_hashing(int skipped) "skipped pages: %d"
+static_round_time(uint64_t gpu, uint64_t cpu, uint64_t hashing) "%llu%llu"
+static_enter_gpu(uint64_t gpu) "%llu"
+static_enter_cpu(uint64_t cpu) "%llu"
