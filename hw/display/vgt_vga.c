@@ -919,8 +919,10 @@ static void cpu_update_state(void *opaque, int running, RunState state)
     FUNC_ENTER;
     if (state == RUN_STATE_FINISH_MIGRATE) {
         /* pause vGPU scheduling */
+        uint64_t t0 = qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000;
         vgt_pause(d->domid);
         d->vgt_paused = true;
+        trace_stop_sched_vgpu_time(qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000 - t0);
     }
     FUNC_EXIT;
 }
@@ -1113,6 +1115,8 @@ static void vgt_log_global_stop(struct MemoryListener *listener)
 
 static void put_snapshot(QEMUFile *f, void *pv, size_t size)
 {
+    uint64_t t0 = qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000;
+
     VGTVGAState *d = ((VGTVMState*) pv)->parent;
 
     FUNC_ENTER;
@@ -1153,10 +1157,13 @@ static void put_snapshot(QEMUFile *f, void *pv, size_t size)
     read_write_snapshot(f, d, 1);
 
     d->vgt_paused = false;
+
+    trace_put_snapshot_time(qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000 - t0);
 }
 
 static int get_snapshot(QEMUFile *f, void *pv, size_t size)
 {
+    uint64_t t0 = qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000;
     VGTVGAState *d = ((VGTVMState*) pv)->parent;
 
     FUNC_ENTER;
@@ -1166,6 +1173,8 @@ static int get_snapshot(QEMUFile *f, void *pv, size_t size)
     /* resume vGPU scheduling */
     vgt_resume(d->domid);
     d->vgt_paused = false;
+
+    trace_get_snapshot_time(qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000 - t0);
     return 0;
 }
 

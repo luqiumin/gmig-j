@@ -121,6 +121,12 @@ static uint64_t bitmap_sync_count;
 
 extern uint64_t migration_time_base_ns;
 
+static uint64_t static_cpu_time = 0;
+static uint64_t static_gpu_time = 0;
+static uint64_t static_hashing_time = 0;
+static uint64_t static_find_time = 0;
+
+
 /***********************************************************/
 /* ram save/restore */
 
@@ -870,24 +876,49 @@ static int ram_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
         }
     }
 
-    /* XBZRLE overflow or normal page */
-    if (pages == -1) {
-        *bytes_transferred += save_page_header(f, block,
+    if (is_complete_stage) {
+        uint64_t t0 = qemu_clock_get_ns(QEMU_CLOCK_HOST) / 1000, t1;
+        /* XBZRLE overflow or normal page */
+        if (pages == -1) {
+            *bytes_transferred += save_page_header(f, block,
                                                offset | RAM_SAVE_FLAG_PAGE);
-        if (!last_stage) {
-            if (vgt_gpu_releated(current_addr >> TARGET_PAGE_BITS)) {
-                vgt_hash_a_page(p, current_addr >> TARGET_PAGE_BITS);
-                hash_cpu_pages_count++;
+            if (!last_stage) {
+                if (vgt_gpu_releated(current_addr >> TARGET_PAGE_BITS)) {
+                    vgt_hash_a_page(p, current_addr >> TARGET_PAGE_BITS);
+                    hash_cpu_pages_count++;
+                }
             }
+            if (send_async) {
+                qemu_put_buffer_async(f, p, TARGET_PAGE_SIZE);
+            } else {
+                qemu_put_buffer(f, p, TARGET_PAGE_SIZE);
+            }
+            *bytes_transferred += TARGET_PAGE_SIZE;
+            pages = 1;
+            acct_info.norm_pages++;
         }
-        if (send_async) {
-            qemu_put_buffer_async(f, p, TARGET_PAGE_SIZE);
-        } else {
-            qemu_put_buffer(f, p, TARGET_PAGE_SIZE);
+        static_cpu_time += (qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000 - t0);
+    }
+    else {
+        /* XBZRLE overflow or normal page */
+        if (pages == -1) {
+            *bytes_transferred += save_page_header(f, block,
+                                               offset | RAM_SAVE_FLAG_PAGE);
+            if (!last_stage) {
+                if (vgt_gpu_releated(current_addr >> TARGET_PAGE_BITS)) {
+                    vgt_hash_a_page(p, current_addr >> TARGET_PAGE_BITS);
+                    hash_cpu_pages_count++;
+                }
+            }
+            if (send_async) {
+                qemu_put_buffer_async(f, p, TARGET_PAGE_SIZE);
+            } else {
+                qemu_put_buffer(f, p, TARGET_PAGE_SIZE);
+            }
+            *bytes_transferred += TARGET_PAGE_SIZE;
+            pages = 1;
+            acct_info.norm_pages++;
         }
-        *bytes_transferred += TARGET_PAGE_SIZE;
-        pages = 1;
-        acct_info.norm_pages++;
     }
 
     XBZRLE_cache_unlock();
@@ -928,25 +959,47 @@ static int gm_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
         /* if it's the last stage, we calculate the hash value, if it is
          * not dirty, we skip it
          */
+
+        uint64_t t0 = qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000, t1;
+
         hash_gpu_pages_count++;
         if (!vgt_page_is_modified(p, current_addr >> TARGET_PAGE_BITS)) {
             skip_by_hashing++;
+            static_hashing_time += (qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000 - t0);
             return 0;
         }
+        static_hashing_time += (qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000 - t0);
     }
 
-    if (block == last_sent_block) {
-        offset |= RAM_SAVE_FLAG_CONTINUE;
-    }
 
-    *bytes_transferred += save_page_header(f, block,
+    if (is_complete_stage) {
+        uint64_t t0 = qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000, t1;
+
+        if (block == last_sent_block) {
+            offset |= RAM_SAVE_FLAG_CONTINUE;
+        }
+
+        *bytes_transferred += save_page_header(f, block,
                                    offset | RAM_SAVE_FLAG_PAGE);
-    qemu_put_buffer(f, p, TARGET_PAGE_SIZE);
-    *bytes_transferred += TARGET_PAGE_SIZE;
-    pages = 1;
-    acct_info.norm_pages++;
+        qemu_put_buffer(f, p, TARGET_PAGE_SIZE);
+        *bytes_transferred += TARGET_PAGE_SIZE;
+        pages = 1;
+        acct_info.norm_pages++;
 
-//    printf("gm_save_page: initial: %d, final: %d, modified: %d\n", initial_cnt, final_cnt, final_mod_cnt);
+        static_gpu_time += (qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000 - t0);
+    }
+    else {
+        if (block == last_sent_block) {
+            offset |= RAM_SAVE_FLAG_CONTINUE;
+        }
+
+        *bytes_transferred += save_page_header(f, block,
+                                   offset | RAM_SAVE_FLAG_PAGE);
+        qemu_put_buffer(f, p, TARGET_PAGE_SIZE);
+        *bytes_transferred += TARGET_PAGE_SIZE;
+        pages = 1;
+        acct_info.norm_pages++;
+    }
 
     return pages;
 }
@@ -980,10 +1033,21 @@ static int ram_gm_find_and_save_block(QEMUFile *f, bool last_stage,
 
     while (true) {
         mr = block->mr;
-        if (ram_offset < block->used_length)
-            ram_offset = migration_bitmap_find_and_reset_dirty(mr, ram_offset);
-        if (gm_offset < block->used_length)
-            gm_offset = vgpu_bitmap_find_and_reset_dirty(mr, gm_offset);
+
+        if (is_complete_stage) {
+            uint64_t t0 = qemu_clock_get_ns(QEMU_CLOCK_HOST) / 1000;
+            if (ram_offset < block->used_length)
+                ram_offset = migration_bitmap_find_and_reset_dirty(mr, ram_offset);
+            if (gm_offset < block->used_length)
+                gm_offset = vgpu_bitmap_find_and_reset_dirty(mr, gm_offset);
+            static_find_time += (qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000 - t0);
+        }
+        else {
+            if (ram_offset < block->used_length)
+                ram_offset = migration_bitmap_find_and_reset_dirty(mr, ram_offset);
+            if (gm_offset < block->used_length)
+                gm_offset = vgpu_bitmap_find_and_reset_dirty(mr, gm_offset);
+        }
 
         if (complete_round && block == last_seen_block &&
             ram_offset >= last_offset && gm_offset >= last_gm_offset) {
@@ -1368,9 +1432,12 @@ static int ram_save_complete(QEMUFile *f, void *opaque)
     hash_gpu_pages_count = 0;
 
     trace_ram_save_complete_begin(get_mig_time());
+
+    uint64_t t0 = qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000;
     vgpu_sync = true;
     migration_bitmap_sync();
     remove_cpu_dirty_from_gpu();
+    trace_sync_bitmap_time(qemu_clock_get_ns(QEMU_CLOCK_HOST)/1000 - t0);
 
     ram_control_before_iterate(f, RAM_CONTROL_FINISH);
 
@@ -1402,6 +1469,8 @@ static int ram_save_complete(QEMUFile *f, void *opaque)
     trace_hash_cpu_pages(hash_cpu_pages_count);
     trace_hash_gpu_pages(hash_gpu_pages_count);
     trace_skip_by_hashing(skip_by_hashing);
+
+    trace_static_time(static_cpu_time, static_gpu_time, static_hashing_time, static_find_time);
     return 0;
 }
 
