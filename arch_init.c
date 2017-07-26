@@ -121,6 +121,19 @@ static uint64_t bitmap_sync_count;
 
 extern uint64_t migration_time_base_ns;
 
+
+static uint64_t cpu_send_cycle_cnt = 0;
+static uint64_t gpu_send_cycle_cnt = 0;
+static uint64_t hashing_cycle_cnt = 0;
+static uint64_t memcpy_cycle_cnt = 0;
+
+static uint64_t cpu_send_sampling = 0;
+static uint64_t gpu_send_sampling = 0;
+static uint64_t hashing_sampling = 0;
+static uint64_t memcpy_sampling = 0;
+
+static uint64_t sampling_flag = 255;
+
 /***********************************************************/
 /* ram save/restore */
 
@@ -872,22 +885,44 @@ static int ram_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
 
     /* XBZRLE overflow or normal page */
     if (pages == -1) {
-        *bytes_transferred += save_page_header(f, block,
-                                               offset | RAM_SAVE_FLAG_PAGE);
         if (!last_stage) {
             if (vgt_gpu_releated(current_addr >> TARGET_PAGE_BITS)) {
                 vgt_hash_a_page(p, current_addr >> TARGET_PAGE_BITS);
                 hash_cpu_pages_count++;
             }
         }
-        if (send_async) {
-            qemu_put_buffer_async(f, p, TARGET_PAGE_SIZE);
-        } else {
-            qemu_put_buffer(f, p, TARGET_PAGE_SIZE);
+
+
+        if (unlikely(sampling_flag%256==1)) {
+            uint64_t cycle0 = rdtsc(), cycles;
+            *bytes_transferred += save_page_header(f, block,
+                                               offset | RAM_SAVE_FLAG_PAGE);
+            if (send_async) {
+                qemu_put_buffer_async(f, p, TARGET_PAGE_SIZE);
+            } else {
+                qemu_put_buffer(f, p, TARGET_PAGE_SIZE);
+            }
+            *bytes_transferred += TARGET_PAGE_SIZE;
+            pages = 1;
+            acct_info.norm_pages++;
+            cycles = rdtsc() - cycle0;
+            if (cycles < 5000) {
+                cpu_send_cycle_cnt += cycles;
+                cpu_send_sampling++;
+            }
         }
-        *bytes_transferred += TARGET_PAGE_SIZE;
-        pages = 1;
-        acct_info.norm_pages++;
+        else {
+            *bytes_transferred += save_page_header(f, block,
+                                               offset | RAM_SAVE_FLAG_PAGE);
+            if (send_async) {
+                qemu_put_buffer_async(f, p, TARGET_PAGE_SIZE);
+            } else {
+                qemu_put_buffer(f, p, TARGET_PAGE_SIZE);
+            }
+            *bytes_transferred += TARGET_PAGE_SIZE;
+            pages = 1;
+            acct_info.norm_pages++;
+        }
     }
 
     XBZRLE_cache_unlock();
@@ -919,6 +954,7 @@ static int gm_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
          */
         vgt_hash_a_page(p, current_addr >> TARGET_PAGE_BITS);
         hash_gpu_pages_count++;
+
     }
     else if (!ram_bulk_stage && !last_stage) {
         //printf("gm_save_page, not bulk or last!!!\n");
@@ -928,25 +964,60 @@ static int gm_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
         /* if it's the last stage, we calculate the hash value, if it is
          * not dirty, we skip it
          */
-        hash_gpu_pages_count++;
-        if (!vgt_page_is_modified(p, current_addr >> TARGET_PAGE_BITS)) {
-            skip_by_hashing++;
-            return 0;
+        if (unlikely(sampling_flag%256==4)) {
+            uint64_t cycle0 = rdtsc(), cycles;
+            hash_gpu_pages_count++;
+            if (!vgt_page_is_modified(p, current_addr >> TARGET_PAGE_BITS)) {
+                skip_by_hashing++;
+                return 0;
+            }
+            cycles = rdtsc() - cycle0;
+            if (cycles < 5000) {
+                hashing_sampling++;
+                hashing_cycle_cnt += cycles;
+            }
+        }
+        else {
+            hash_gpu_pages_count++;
+            if (!vgt_page_is_modified(p, current_addr >> TARGET_PAGE_BITS)) {
+                skip_by_hashing++;
+                return 0;
+            }
         }
     }
 
-    if (block == last_sent_block) {
-        offset |= RAM_SAVE_FLAG_CONTINUE;
-    }
+    if (unlikely(sampling_flag%256==0)) {
+        uint64_t cycle0 = rdtsc(), cycles;
 
-    *bytes_transferred += save_page_header(f, block,
+        if (block == last_sent_block) {
+            offset |= RAM_SAVE_FLAG_CONTINUE;
+        }
+
+        *bytes_transferred += save_page_header(f, block,
                                    offset | RAM_SAVE_FLAG_PAGE);
-    qemu_put_buffer(f, p, TARGET_PAGE_SIZE);
-    *bytes_transferred += TARGET_PAGE_SIZE;
-    pages = 1;
-    acct_info.norm_pages++;
+        qemu_put_buffer(f, p, TARGET_PAGE_SIZE);
+        *bytes_transferred += TARGET_PAGE_SIZE;
+        pages = 1;
+        acct_info.norm_pages++;
 
-//    printf("gm_save_page: initial: %d, final: %d, modified: %d\n", initial_cnt, final_cnt, final_mod_cnt);
+        cycles = rdtsc() - cycle0;
+        if (cycles < 5000) {
+            gpu_send_sampling++;
+            gpu_send_cycle_cnt += cycles;
+        }
+    }
+    else {
+        if (block == last_sent_block) {
+            offset |= RAM_SAVE_FLAG_CONTINUE;
+        }
+
+        *bytes_transferred += save_page_header(f, block,
+                                   offset | RAM_SAVE_FLAG_PAGE);
+        qemu_put_buffer(f, p, TARGET_PAGE_SIZE);
+        *bytes_transferred += TARGET_PAGE_SIZE;
+        pages = 1;
+        acct_info.norm_pages++;
+    }
 
     return pages;
 }
@@ -1382,6 +1453,7 @@ static int ram_save_complete(QEMUFile *f, void *opaque)
 
         pages = ram_gm_find_and_save_block(f, true, &bytes_transferred);
         total_pages += pages;
+        sampling_flag++;
         /* no more blocks to sent */
         if (pages == 0) {
             break;
@@ -1402,6 +1474,9 @@ static int ram_save_complete(QEMUFile *f, void *opaque)
     trace_hash_cpu_pages(hash_cpu_pages_count);
     trace_hash_gpu_pages(hash_gpu_pages_count);
     trace_skip_by_hashing(skip_by_hashing);
+
+    trace_downtime_cycle(cpu_send_cycle_cnt, gpu_send_cycle_cnt, hashing_cycle_cnt,
+                            cpu_send_sampling, gpu_send_sampling, hashing_sampling);
     return 0;
 }
 

@@ -27,6 +27,12 @@ static vgt_logd_t vgt_logd = {
     .max_slot = 0
 };
 
+static inline uint64_t rdtsc(void) {
+    uint64_t tsc;
+    asm volatile ("rdtsc" : "=A" (tsc));
+    return tsc;
+}
+
 /* when the slot array is not large enough, we have to increase it */
 static inline
 bool logd_increase_slot_count(vgt_logd_t *logd, unsigned long gfn) {
