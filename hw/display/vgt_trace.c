@@ -265,7 +265,7 @@ static inline uint64_t get_tracing_time(void) {
 }
 
 static void* vgt_tracing_thread(void * opaque) {
-    uint64_t t1, t2, ngpudirty, ncpudirty, nbothdirty, nrelated;
+    uint64_t t1 = 0, t2 = 0, t3 = 0, ngpudirty, ncpudirty, nbothdirty, nrelated;
     RAMBlock *block;
 
     init_vgpu_tracing();
@@ -286,6 +286,10 @@ static void* vgt_tracing_thread(void * opaque) {
 
     while (1) {
 //        g_usleep(50000);
+
+        while (t1!=0 && get_tracing_time()-t1 < 300) {
+            g_usleep(10000);
+        }
 
         bitmap_clear(vgt_dirty_bitmap, 0, ram_npages);
         bitmap_clear(vgt_vcpu_bitmap, 0, ram_npages);
