@@ -120,7 +120,6 @@ static uint64_t bitmap_sync_count;
 
 
 extern uint64_t migration_time_base_ns;
-
 /***********************************************************/
 /* ram save/restore */
 
@@ -324,6 +323,7 @@ static unsigned long *migration_bitmap;
 static uint64_t migration_dirty_pages;
 static uint32_t last_version;
 bool ram_bulk_stage;
+bool gm_bulk_stage;
 
 /* support vgpu migration */
 static unsigned long *vgpu_bitmap;
@@ -716,6 +716,8 @@ static void migration_bitmap_sync(void)
 
     bitmap_sync_count++;
 
+    //printf("syncing!\n");
+
     if (!bytes_xfer_prev) {
         bytes_xfer_prev = ram_bytes_transferred();
     }
@@ -741,7 +743,8 @@ static void migration_bitmap_sync(void)
             vgpu_bitmap_sync_range(block->mr->ram_addr, block->used_length);
         }
         trace_gpu_bitmap_sync_end(get_mig_time());
-        vgpu_sync = false;
+        //vgpu_sync = false;
+        //printf("vgpu sync!\n");
     }
     else {
         trace_cpu_bitmap_sync_begin(get_mig_time());
@@ -921,8 +924,11 @@ static int gm_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
         hash_gpu_pages_count++;
     }
     else if (!ram_bulk_stage && !last_stage) {
-        //printf("gm_save_page, not bulk or last!!!\n");
-        return 0;
+        hash_gpu_pages_count++;
+        if (!vgt_hash_a_page(p, current_addr >> TARGET_PAGE_BITS)) {
+            skip_by_hashing++;
+            return 0;
+        }
     }
     else {
         /* if it's the last stage, we calculate the hash value, if it is
@@ -1070,6 +1076,10 @@ static int ram_find_and_save_block(QEMUFile *f, bool last_stage,
             if (!block) {
                 //if (ram_bulk_stage) printf("exit bulk_stage\n");
 
+                if (ram_bulk_stage) {
+                    gm_bulk_stage = true;
+                }
+
                 block = QLIST_FIRST_RCU(&ram_list.blocks);
                 complete_round = true;
                 ram_bulk_stage = false;
@@ -1117,6 +1127,7 @@ void acct_update_position(QEMUFile *f, size_t size, bool zero)
 
 static ram_addr_t ram_save_remaining(void)
 {
+    //printf("ram: %lu, gm: %lu\n", migration_dirty_pages, vgpu_dirty_pages);
     return migration_dirty_pages + vgpu_dirty_pages;
 }
 
@@ -1191,6 +1202,7 @@ static void reset_ram_globals(void)
 
     //printf("enter bulk_stage\n");
     ram_bulk_stage = true;
+    gm_bulk_stage = true;
     vgpu_sync = true;
 }
 
@@ -1309,7 +1321,7 @@ static int ram_save_iterate(QEMUFile *f, void *opaque)
     while ((ret = qemu_file_rate_limit(f)) == 0) {
         int pages;
 
-        if (ram_bulk_stage)
+        if (!ram_bulk_stage && vgpu_sync)
             pages = ram_gm_find_and_save_block(f, false, &bytes_transferred);
         else
             pages = ram_find_and_save_block(f, false, &bytes_transferred);
@@ -1405,17 +1417,26 @@ static int ram_save_complete(QEMUFile *f, void *opaque)
     return 0;
 }
 
+int mig_round_counter = 0;
+
 static uint64_t ram_save_pending(QEMUFile *f, void *opaque, uint64_t max_size)
 {
     uint64_t remaining_size;
     remaining_size = ram_save_remaining() * TARGET_PAGE_SIZE;
 //    DPRINTF("ram_save_pending, cpu remain: %lu, gpu remain: %lu, max: %lu\n", migration_dirty_pages, vgpu_dirty_pages, max_size>>12);
 
+    if (vgpu_dirty_pages == 0) {
+        gm_bulk_stage = false;
+    }
+
     bool if_sync = remaining_size < max_size;
     uint64_t old_remaining_size = remaining_size;
     trace_ram_save_pending(get_mig_time(), if_sync, remaining_size/TARGET_PAGE_SIZE);
 
-    if (remaining_size < max_size) {
+    if (remaining_size < 10) {
+
+        mig_round_counter++;
+
         qemu_mutex_lock_iothread();
         rcu_read_lock();
         migration_bitmap_sync();

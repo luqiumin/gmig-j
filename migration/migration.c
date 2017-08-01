@@ -608,6 +608,8 @@ int64_t migrate_xbzrle_cache_size(void)
 /* migration thread support */
 uint64_t migration_time_base_ns;
 extern bool ram_bulk_stage;
+extern bool gm_bulk_stage;
+extern int mig_round_counter;
 static void *migration_thread(void *opaque)
 {
     migration_time_base_ns = qemu_clock_get_ns(QEMU_CLOCK_HOST);
@@ -632,7 +634,7 @@ static void *migration_thread(void *opaque)
         if (!qemu_file_rate_limit(s->file)) {
             pending_size = qemu_savevm_state_pending(s->file, max_size);
             trace_migrate_pending(pending_size, max_size);
-            if ((pending_size && pending_size >= max_size) || ram_bulk_stage) {
+            if ((pending_size && pending_size >= max_size) || ram_bulk_stage || gm_bulk_stage || mig_round_counter < 9) {
                 qemu_savevm_state_iterate(s->file);
             } else {
                 int ret;
@@ -715,7 +717,7 @@ static void *migration_thread(void *opaque)
     qemu_bh_schedule(s->cleanup_bh);
     qemu_mutex_unlock_iothread();
 
-    qmp_quit(NULL);
+    //qmp_quit(NULL);
     return NULL;
 }
 

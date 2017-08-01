@@ -107,7 +107,9 @@ unsigned long* logd_alloc_dirty_bitmap(void) {
 extern bool hash_of_page_256bit(void* va, void* target);
 
 static inline
-void logd_hash_a_page(vgt_logd_t *logd, void *va, unsigned long gfn) {
+bool logd_hash_a_page(vgt_logd_t *logd, void *va, unsigned long gfn) {
+    int ret;
+
     assert(logd!=NULL);
     assert(va!=NULL);
 
@@ -134,7 +136,8 @@ void logd_hash_a_page(vgt_logd_t *logd, void *va, unsigned long gfn) {
     set_bit(TAG_OFFSET(gfn), slot->logd_dirty_bitmap);
 
     logd_tag_t *tag = slot->logd_tag_block->block + TAG_OFFSET(gfn);
-    hash_of_page_256bit(va, tag);
+    ret = hash_of_page_256bit(va, tag);
+    return ret;
 }
 
 static inline
@@ -166,8 +169,9 @@ bool vgt_page_is_modified(void *va, unsigned long gfn) {
     return ret;
 }
 
-void vgt_hash_a_page(void *va, unsigned long gfn) {
-    logd_hash_a_page(&vgt_logd, va, gfn);
+bool vgt_hash_a_page(void *va, unsigned long gfn) {
+    bool ret = logd_hash_a_page(&vgt_logd, va, gfn);
+    return ret;
 }
 
 bool vgt_gpu_releated(unsigned long gfn) {
