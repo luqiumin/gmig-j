@@ -1611,3 +1611,5 @@ hash_cpu_pages(int cpu_paegs) "hash cpu pages: %d"
 skip_by_hashing(int skipped) "skipped pages: %d"
 
 gpu_dirty_speed(int time, double gpu_speed, double cpu_speed) "g: %lf, c: %lf"
+
+g_modified(uint64_t gfn) ""

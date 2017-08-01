@@ -235,6 +235,7 @@ static void gm_compare_page(RAMBlock *block, ram_addr_t offset, bool first_stage
             vgt_hash_a_page(p, gfn);
         }
         else if (vgt_page_is_modified(p, gfn)) {
+            trace_g_modified(gfn);
             set_bit(gfn, vgt_dirty_bitmap);
         }
     }
