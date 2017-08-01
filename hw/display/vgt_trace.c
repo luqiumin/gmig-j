@@ -288,7 +288,7 @@ static void* vgt_tracing_thread(void * opaque) {
     while (1) {
 //        g_usleep(50000);
 
-        while (t1!=0 && get_tracing_time()-t1 < 300) {
+        while (t1!=0 && get_tracing_time()-t1 < 200) {
             g_usleep(10000);
         }
 
