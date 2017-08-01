@@ -1613,3 +1613,5 @@ skip_by_hashing(int skipped) "skipped pages: %d"
 gpu_dirty_speed(int time, double gpu_speed, double cpu_speed) "g: %lf, c: %lf"
 
 g_modified(uint64_t gfn) ""
+g_endcycle(uint64_t time) ""
+c_modified(uint64_t pfn) ""

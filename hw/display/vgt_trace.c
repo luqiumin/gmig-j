@@ -99,27 +99,15 @@ static void vcpu_bitmap_sync_range(ram_addr_t start, ram_addr_t length)
     unsigned long page = BIT_WORD(start >> TARGET_PAGE_BITS);
 
     /* start address is aligned at the start of a word? */
-    if (((page * BITS_PER_LONG) << TARGET_PAGE_BITS) == start) {
-        int k;
-        int nr = BITS_TO_LONGS(length >> TARGET_PAGE_BITS);
-        unsigned long *src = ram_list.dirty_memory[DIRTY_MEMORY_MIGRATION];
-
-        for (k = page; k < page + nr; k++) {
-            if (src[k]) {
-                vgt_vcpu_bitmap[k] |= src[k];
-                src[k] = 0;
-            }
-        }
-    } else {
-        for (addr = 0; addr < length; addr += TARGET_PAGE_SIZE) {
-            if (cpu_physical_memory_get_dirty(start + addr,
-                                              TARGET_PAGE_SIZE,
-                                              DIRTY_MEMORY_MIGRATION)) {
-                cpu_physical_memory_reset_dirty(start + addr,
-                                                TARGET_PAGE_SIZE,
-                                                DIRTY_MEMORY_MIGRATION);
-                vcpu_bitmap_set_dirty(start + addr);
-            }
+    for (addr = 0; addr < length; addr += TARGET_PAGE_SIZE) {
+        if (cpu_physical_memory_get_dirty(start + addr,
+                                          TARGET_PAGE_SIZE,
+                                          DIRTY_MEMORY_MIGRATION)) {
+            cpu_physical_memory_reset_dirty(start + addr,
+                                            TARGET_PAGE_SIZE,
+                                            DIRTY_MEMORY_MIGRATION);
+            vcpu_bitmap_set_dirty(start + addr);
+            trace_c_modified(start + addr);
         }
     }
 }
@@ -288,12 +276,15 @@ static void* vgt_tracing_thread(void * opaque) {
     while (1) {
 //        g_usleep(50000);
 
-        while (t1!=0 && get_tracing_time()-t1 < 200) {
-            g_usleep(10000);
-        }
+
 
         bitmap_clear(vgt_dirty_bitmap, 0, ram_npages);
         bitmap_clear(vgt_vcpu_bitmap, 0, ram_npages);
+
+        while (t1!=0 && get_tracing_time()-t1 < 200) {
+            g_usleep(10000);
+        }
+        trace_g_endcycle(get_tracing_time());
 
         vgpu_bitmap_sync();
 
