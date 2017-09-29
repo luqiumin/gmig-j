@@ -634,7 +634,8 @@ static void *migration_thread(void *opaque)
         if (!qemu_file_rate_limit(s->file)) {
             pending_size = qemu_savevm_state_pending(s->file, max_size);
             trace_migrate_pending(pending_size, max_size);
-            if ((pending_size && pending_size >= max_size) || ram_bulk_stage || gm_bulk_stage || mig_round_counter < 9) {
+            if ((pending_size && pending_size >= max_size) || ram_bulk_stage ||
+                    gm_bulk_stage || mig_round_counter < 7) {
                 qemu_savevm_state_iterate(s->file);
             } else {
                 int ret;
