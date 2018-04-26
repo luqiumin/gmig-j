@@ -247,3 +247,28 @@ __asm__ (
 	"ret\n\t"
 );
 
+int vgt_get_domid_public(void)
+{
+    int domid = 0;
+
+#ifdef CONFIG_KVM
+    if (kvm_enabled()) {
+        KVMState *s = kvm_state;
+
+        domid = kvm_vm_ioctl(s, KVM_GET_DOMID, 0);
+        if (domid <= 0) {
+            error_report("vgt: get KVM_GET_DOMID failed: %d", domid);
+            exit(-1);
+        }
+        DPRINTF("kvm_domid is %d\n", domid);
+    }
+#endif
+
+    if (xen_enabled()) {
+        domid = xen_domid;
+    }
+    assert(domid > 0);
+    // guest_domid = domid;
+
+    return domid;
+}

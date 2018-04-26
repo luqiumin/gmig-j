@@ -20,6 +20,7 @@
 #define DIRTY_MEMORY_CODE      1
 #define DIRTY_MEMORY_MIGRATION 2
 #define DIRTY_MEMORY_VGPU      3
+// #define DIRTY_MEMORY_VGPU_REFRESH      4
 #define DIRTY_MEMORY_NUM       4        /* num of dirty bits */
 
 #include <stdint.h>

@@ -1015,6 +1015,70 @@ EXIT:
     return total;
 }
 
+
+/*
+ * bitmap:  output of dirty_bitmap status
+ * off:  read /sys/kernel/vgt/vm#/dirty_bitmap from offset in bytes
+ * count: read bytes
+ */
+// int refresh_bitmap_read(uint8_t* bitmap, unsigned long off, unsigned long count)
+// {
+//     char file_name[PATH_MAX] = {0};
+//     int domid = vgt_get_domid();
+//     int fd = -1;
+//     int sz = 1<<TARGET_PAGE_BITS; /* one page*/
+//     char* buf = NULL;
+//     unsigned long total=0;
+
+//     snprintf(file_name, PATH_MAX, "/sys/kernel/vgt/vm%d/dirty_bitmap", domid);
+
+//     /* must use low level open() instead of fopen() */
+//     if ((fd=open(file_name, O_RDWR)) == -1) {
+//         qemu_log("vGT: %s failed to open file %s! errno = %d\n",
+//                 __func__, file_name, errno);
+//         goto EXIT;
+//     }
+
+//     if (count < sz)
+//         sz = count;
+
+//     buf = g_malloc(sz);
+
+    
+
+//     /*STEP2: Read back all dirty status*/
+//     total = 0;
+//     if (lseek(fd, off, SEEK_SET) == -1) {
+//         DPRINTF("Seek to 0x%lx failed. \n", off);
+//         goto EXIT;
+//     }
+
+//     while(1){
+//         int remains = (count - total) > sz ? sz: count -total;
+//         int n_read = read(fd, buf, remains);
+//         if (n_read < 0) {
+//             DPRINTF("Read dirty_bitmap failed. \n");
+//             total = 0;
+//             goto EXIT;
+//         }
+
+//         memcpy(bitmap + total, buf, n_read);
+//         total += n_read;
+//         if (n_read < remains || total >= count )
+//             break;
+//     }
+
+//     DPRINTF("READ 0x%lx size of dirty_bitmap from offset=0x%lx."
+//             " Actual get 0x%lx \n", count, off, total);
+
+// EXIT:
+//     if (buf)
+//         g_free(buf);
+//     if (fd != -1)
+//         close(fd);
+//     return total;
+// }
+
 static void vgt_sync_dirty_bitmap(VGTVGAState *d, uint8_t *ram_bitmap, 
         unsigned long ram_bitmap_size, /* bitmap size in bytes */
         unsigned long start_addr, 
@@ -1051,6 +1115,42 @@ static void vgt_sync_dirty_bitmap(VGTVGAState *d, uint8_t *ram_bitmap,
 
     return;
 }
+// static void vgt_sync_refresh_bitmap(VGTVGAState *d, uint8_t *ram_bitmap, 
+//         unsigned long ram_bitmap_size, /* bitmap size in bytes */
+//         unsigned long start_addr, 
+//         unsigned long nr_pages)
+// {
+//     unsigned long bit_start = start_addr >> TARGET_PAGE_BITS;
+//     int bit_offset = bit_start % BITS_PER_BYTE;
+//     int n = 0;
+
+//     FUNC_ENTER;
+
+//     n = refresh_bitmap_read(ram_bitmap, bit_start / BITS_PER_BYTE, 
+//             BITS_TO_BYTES(nr_pages + (bit_start % BITS_PER_BYTE)));
+//     memset(ram_bitmap + n, 0, ram_bitmap_size - n);
+
+//     if (n > 0 && bit_offset) {
+//         /* bit_start is not BTYES aligned.*/
+//         char* dst = (char*) ram_bitmap;
+//         char* src = dst;
+//         int i;
+
+//         DPRINTF("Hit non-bytes aligned bit operation. Shift bit: %d \n",
+//                 bit_offset);
+//         for(i=0; i< nr_pages / BITS_PER_BYTE; i++) {
+//             char b;
+//             b = src[i];
+//             b >>= bit_offset;
+//             b &= (src[i + 1] << (BITS_PER_BYTE - bit_offset));
+//             dst[i] = b;
+//         }
+//         /* clear last bytes */
+//         dst[i+1] = 0;
+//     }
+
+//     return;
+// }
 
 extern bool ram_bulk_stage;
 
@@ -1075,6 +1175,7 @@ static void vgt_log_sync(MemoryListener *listener,
         unsigned long bitmap_size =
             (BITS_TO_LONGS(nr_pages) + 1)*sizeof(unsigned long);
         unsigned long *bitmap = g_malloc(bitmap_size);
+        // unsigned long *bitmap1 = g_malloc(bitmap_size);
 
         DPRINTF("[%s] MemSection HWADDR 0x%lx size 0x%lx bitmap_size=0x%lx \n",
                __FUNCTION__, start_addr, size, bitmap_size);
@@ -1084,8 +1185,14 @@ static void vgt_log_sync(MemoryListener *listener,
                 bitmap_size,
                 start_addr,
                 nr_pages);
+        // vgt_sync_refresh_bitmap(d,
+        //         (uint8_t*)bitmap1,
+        //         bitmap_size,
+        //         start_addr,
+        //         nr_pages);
 
         gpu_physical_memory_set_dirty_lebitmap(bitmap, start_addr, nr_pages);
+        // gpu_physical_memory_set_refresh_lebitmap(bitmap1, start_addr, nr_pages);
 
         g_free(bitmap);
     }

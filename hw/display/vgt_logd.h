@@ -52,5 +52,6 @@ typedef struct vgt_logd_t {
 bool vgt_page_is_modified(void *va, unsigned long gfn);
 void vgt_hash_a_page(void *va, unsigned long gfn);
 bool vgt_gpu_releated(unsigned long gfn);
+int vgt_get_domid_public(void);
 
 #endif

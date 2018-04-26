@@ -327,6 +327,7 @@ bool ram_bulk_stage;
 
 /* support vgpu migration */
 static unsigned long *vgpu_bitmap;
+// static unsigned long *vgpu_refresh_bitmap;
 static uint64_t vgpu_dirty_pages;
 static ram_addr_t last_gm_offset;
 static bool vgpu_sync;
@@ -603,6 +604,7 @@ static void vgpu_bitmap_sync_range(ram_addr_t start, ram_addr_t length)
         int k;
         int nr = BITS_TO_LONGS(length >> TARGET_PAGE_BITS);
         unsigned long *src = ram_list.dirty_memory[DIRTY_MEMORY_VGPU];
+        // unsigned long *src1 = ram_list.dirty_memory[DIRTY_MEMORY_VGPU_REFRESH];
 
         for (k = page; k < page + nr; k++) {
             if (src[k]) {
@@ -614,6 +616,15 @@ static void vgpu_bitmap_sync_range(ram_addr_t start, ram_addr_t length)
                 /* we shouldn't set the gpu dirty bitmap zero */
                 // src[k] = 0;
             }
+            // if (src1[k]) {
+            //     // unsigned long new_dirty;
+            //     // new_dirty = ~vgpu_refresh_bitmap[k];
+            //     vgpu_refresh_bitmap[k] |= src1[k];
+            //     // new_dirty &= src1[k];
+            //     // vgpu_dirty_pages += ctpopl(new_dirty);
+            //     /* we shouldn't set the gpu dirty bitmap zero */
+            //     // src[k] = 0;
+            // }
         }
     } else {
         for (addr = 0; addr < length; addr += TARGET_PAGE_SIZE) {
@@ -897,6 +908,94 @@ static int ram_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
 
 static uint8_t pp[TARGET_PAGE_SIZE];
 
+static int kernel_refresh_page(unsigned long gfn)
+{
+    FUNC_ENTER;
+    int bit_offset = gfn % BITS_PER_BYTE;
+    int byte_offset = gfn / BITS_PER_BYTE;
+    char file_name[PATH_MAX] = {0};
+    int domid = vgt_get_domid_public();
+    int fd = -1;
+    int count = 1;
+    char* buf = NULL;
+    unsigned long total=0;
+    snprintf(file_name, PATH_MAX, "/sys/kernel/vgt/vm%d/refresh_bitmap", domid);
+    /* must use low level open() instead of fopen() */
+    if ((fd=open(file_name, O_WRONLY)) == -1) {
+        qemu_log("vGT: %s failed to open file %s! errno = %d\n",
+                __func__, file_name, errno);
+        goto EXIT;
+    }
+    buf = g_malloc(count);
+    buf[0] = ( 1<<bit_offset ) ;
+    if (lseek(fd, byte_offset, SEEK_SET) == -1) {
+        DPRINTF("Seek to 0x%lx failed. \n", off);
+        goto EXIT;
+    }
+    int n_written = write(fd, buf, 1);
+    if (n_written < 0) {
+        DPRINTF("Write dirty_bitmap failed.\n");
+        total = 0;
+        goto EXIT;
+    }
+    total = 1;
+    DPRINTF("WRITE 0x%lx size of dirty_bitmap from offset=0x%lx."
+        " Actual write 0x%lx \n", 1, byte_offset, 1);
+EXIT:
+    if (buf)
+        g_free(buf);
+    if (fd != -1)
+        close(fd);
+    return total;
+}
+static bool kernel_test_page_dirty(unsigned long gfn)
+{
+    FUNC_ENTER;
+    int bit_offset = gfn % BITS_PER_BYTE;
+    int byte_offset = gfn / BITS_PER_BYTE;
+    char file_name[PATH_MAX] = {0};
+    int domid = vgt_get_domid_public();
+    int fd = -1;
+    int count = 1;
+    char* buf = NULL;
+    bool ret=true;
+    snprintf(file_name, PATH_MAX, "/sys/kernel/vgt/vm%d/refresh_bitmap", domid);
+    /* must use low level open() instead of fopen() */
+    if ((fd=open(file_name, O_RDONLY)) == -1) {
+        qemu_log("vGT: %s failed to open file %s! errno = %d\n",
+                __func__, file_name, errno);
+        goto EXIT;
+    }
+    buf = g_malloc(count);
+    // buf[0] = ( 1<<bit_offset ) ;
+    if (lseek(fd, byte_offset, SEEK_SET) == -1) {
+        DPRINTF("Seek to 0x%lx failed. \n", off);
+        goto EXIT;
+    }
+    int n_read = read(fd, buf, 1);
+    if (n_read < 0) {
+            DPRINTF("Read dirty_bitmap failed. \n");
+            goto EXIT;
+    }
+    char test=(char)(( 1<<bit_offset ));
+    if (test&(buf[0]))
+    {
+        ret=true;
+    }
+    else
+    {
+        ret=false;
+    }
+    DPRINTF("WRITE 0x%lx size of dirty_bitmap from offset=0x%lx."
+        " Actual write 0x%lx \n", 1, byte_offset, 1);
+EXIT:
+    if (buf)
+        g_free(buf);
+    if (fd != -1)
+        close(fd);
+    return ret;
+}
+
 static int gm_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
                          bool last_stage, uint64_t *bytes_transferred)
 {
@@ -907,8 +1006,9 @@ static int gm_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
 
     p = memory_region_get_ram_ptr(mr) + offset;
     current_addr = block->offset + offset;
-
+    
     if (!last_stage) {
+        kernel_refresh_page(current_addr >> TARGET_PAGE_BITS);
         memcpy(pp, p, TARGET_PAGE_SIZE);
         p = pp;
     }
@@ -917,7 +1017,7 @@ static int gm_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
         /* if it's not the last stage, then it has to be the first cycle,
          * and we have to caculate the hash value of it
          */
-        vgt_hash_a_page(p, current_addr >> TARGET_PAGE_BITS);
+        // vgt_hash_a_page(p, current_addr >> TARGET_PAGE_BITS);
         hash_gpu_pages_count++;
     }
     else if (!ram_bulk_stage && !last_stage) {
@@ -929,7 +1029,11 @@ static int gm_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
          * not dirty, we skip it
          */
         hash_gpu_pages_count++;
-        if (!vgt_page_is_modified(p, current_addr >> TARGET_PAGE_BITS)) {
+        // if (!vgt_page_is_modified(p, current_addr >> TARGET_PAGE_BITS)) {
+        //     skip_by_hashing++;
+        //     return 0;
+        // }
+        if (!kernel_test_page_dirty(current_addr >> TARGET_PAGE_BITS)) {
             skip_by_hashing++;
             return 0;
         }
@@ -1160,6 +1264,10 @@ static void migration_end(void)
         g_free(vgpu_bitmap);
         vgpu_bitmap = NULL;
     }
+    // if (vgpu_refresh_bitmap) {
+    //     g_free(vgpu_refresh_bitmap);
+    //     vgpu_refresh_bitmap = NULL;
+    // }
 
     XBZRLE_cache_lock();
     if (XBZRLE.cache) {
@@ -1255,8 +1363,10 @@ static int ram_save_setup(QEMUFile *f, void *opaque)
     ram_bitmap_pages = last_ram_offset() >> TARGET_PAGE_BITS;
     migration_bitmap = bitmap_new(ram_bitmap_pages);
     vgpu_bitmap = bitmap_new(ram_bitmap_pages);
+    // vgpu_refresh_bitmap = bitmap_new(ram_bitmap_pages);
     bitmap_set(migration_bitmap, 0, ram_bitmap_pages);
     bitmap_clear(vgpu_bitmap, 0, ram_bitmap_pages);
+    // bitmap_clear(vgpu_refresh_bitmap, 0, ram_bitmap_pages);
 
     /*
      * Count the total number of pages used by ram blocks not including any
