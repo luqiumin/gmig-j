@@ -28,9 +28,14 @@
 #define LOGD_HASH_SIZE 32
 #define VGT_PAGE_SHIFT 12
 
+#define LOGD_SAMPLE_SIZE 4
+
+#define LOGD_SAMPLE_INTERVAL 16
+
 /* 256bit hash value */
 typedef struct logd_tag_t {
     uint8_t data[LOGD_HASH_SIZE];
+    uint8_t data_sample[LOGD_SAMPLE_SIZE];
 } logd_tag_t;
 
 typedef struct logd_tag_block_t {
